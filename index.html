@@ -183,20 +183,6 @@
     0%,100%{transform:scale(.88);opacity:.9;}
     50%{transform:scale(1.12);opacity:1;}
   }
-  .stamp{
-    position:absolute;left:50%;top:50%;
-    width:min(84%,72px);aspect-ratio:1/1;
-    transform:translate(-50%,-50%) rotate(-12deg) scale(1);
-    pointer-events:none;z-index:5;
-  }
-  .stamp.pop{animation:stampPop .55s cubic-bezier(.2,1.5,.4,1);}
-  @keyframes stampPop{
-    0%{transform:translate(-50%,-50%) rotate(-4deg) scale(2.3);opacity:0;}
-    55%{transform:translate(-50%,-50%) rotate(-13deg) scale(.94);opacity:1;}
-    100%{transform:translate(-50%,-50%) rotate(-12deg) scale(1);opacity:1;}
-  }
-  .stamp svg{width:100%;height:100%;display:block;filter:drop-shadow(0 3px 6px rgba(180,60,60,.18));}
-
   .legend{
     flex:0 0 auto;
     display:flex;align-items:center;justify-content:center;gap:clamp(8px,1.4vw,18px);flex-wrap:wrap;
@@ -616,12 +602,6 @@
 <div class="confetti-layer" id="confettiLayer" aria-hidden="true"></div>
 <div class="banner-layer" id="bannerLayer" aria-hidden="true"></div>
 
-<svg width="0" height="0" style="position:absolute" aria-hidden="true">
-  <defs>
-    <path id="stampArc" d="M 50 50 m -30 0 a 30 30 0 1 1 60 0 a 30 30 0 1 1 -60 0" fill="none"></path>
-  </defs>
-</svg>
-
 <script>
 (function () {
   'use strict';
@@ -683,7 +663,6 @@
   var elStatTodayCount = $('statTodayCount');
   var elDateTitle = $('dateTitle');
   var elDateSub = $('dateSub');
-  var elHeroHeart = $('heroHeart');
   var elBigHeart = $('bigHeart');
   var elBigCount = $('bigCount');
   var elBigTotal = $('bigTotal');
@@ -1146,60 +1125,7 @@
   }
 
   /* =========================================================
-     7. 엑설런트 도장
-     ========================================================= */
-  function makeStamp() {
-    var NSX = 'http://www.w3.org/2000/svg';
-    var wrap = document.createElement('div');
-    wrap.className = 'stamp';
-    wrap.setAttribute('aria-hidden', 'true');
-
-    var svg = document.createElementNS(NSX, 'svg');
-    svg.setAttribute('viewBox', '0 0 100 100');
-
-    function el(name, attrs, text) {
-      var n = document.createElementNS(NSX, name);
-      for (var k in attrs) { if (Object.prototype.hasOwnProperty.call(attrs, k)) { n.setAttribute(k, attrs[k]); } }
-      if (text) { n.textContent = text; }
-      return n;
-    }
-
-    var g = el('g', { fill: 'none', transform: 'rotate(-12 50 50)' });
-    g.appendChild(el('circle', { cx: '50', cy: '50', r: '45.5', stroke: '#E8A93A', 'stroke-width': '3.4' }));
-    g.appendChild(el('circle', { cx: '50', cy: '50', r: '39.5', stroke: '#E5484D', 'stroke-width': '1.5', 'stroke-dasharray': '2 2.6' }));
-    g.appendChild(el('text', {
-      x: '50', y: '33', 'text-anchor': 'middle', 'font-size': '8', 'font-weight': '700', fill: '#E8A93A'
-    }, '★ ★ ★'));
-    g.appendChild(el('text', {
-      x: '50', y: '54', 'text-anchor': 'middle', 'font-size': '13.4', 'font-weight': '900',
-      fill: '#D64242', letter: '0'
-    }, 'EXCELLENT'));
-    g.appendChild(el('text', {
-      x: '50', y: '67', 'text-anchor': 'middle', 'font-size': '8.5', 'font-weight': '800', fill: '#C98A1E'
-    }, '엑설런트!'));
-    g.appendChild(el('text', {
-      x: '50', y: '81', 'text-anchor': 'middle', 'font-size': '7', 'font-weight': '700', fill: '#E8A93A'
-    }, '· · ·'));
-    svg.appendChild(g);
-    wrap.appendChild(svg);
-    return wrap;
-  }
-
-  function setStamp(host, show, pop) {
-    var existing = host.querySelector('.stamp');
-    if (show) {
-      if (!existing) {
-        var st = makeStamp();
-        if (pop) { st.classList.add('pop'); }
-        host.appendChild(st);
-      }
-    } else if (existing) {
-      existing.parentNode.removeChild(existing);
-    }
-  }
-
-  /* =========================================================
-     8. 범례 · 분야 칩 · 항목 목록 만들기
+     7. 범례 · 분야 칩 · 항목 목록 만들기
      ========================================================= */
   function buildLegend() {
     var holders = document.querySelectorAll('[data-legend]');
@@ -1295,7 +1221,7 @@
   }
 
   /* =========================================================
-     9. 상태 반영
+     8. 상태 반영
      ========================================================= */
   var view = 'calendar';
   var viewMonth = new Date(todayDate().getFullYear(), todayDate().getMonth(), 1);
@@ -1422,11 +1348,9 @@
 
       var slot = document.createElement('span');
       slot.className = 'heart-slot';
-      slot.style.position = 'relative';
       var svg = makeHeartSvg(counts, null);
       applyProgress(svg, counts, false);
       slot.appendChild(svg);
-      if (full) { setStamp(slot, true, false); }
       btn.appendChild(slot);
 
       var label = (m + 1) + '월 ' + dayNum + '일 ' + WEEK_KO[wd] + '요일';
@@ -1434,7 +1358,6 @@
         var sp2 = SUBJECTS[s2];
         label += ', ' + sp2.name + ' ' + counts[sp2.id].done + '/' + counts[sp2.id].total;
       }
-      if (full) { label += ', 엑설런트 완성'; }
       btn.setAttribute('aria-label', label);
 
       frag.appendChild(btn);
@@ -1453,7 +1376,6 @@
     var rec = store[key] || null;
     var counts = countsFor(rec);
     var done = totalDone(rec);
-    var full = done >= TOTAL_ITEMS;
 
     elDateTitle.textContent = (selectedDate.getMonth() + 1) + '월 ' + selectedDate.getDate() +
       '일 (' + WEEK_KO[selectedDate.getDay()] + ')';
@@ -1478,14 +1400,13 @@
     updateTrain(done);
     syncChips(counts);
     syncSections(rec);
-    setStamp(elHeroHeart, full, !!animate && full);
 
     var ve = elDateTitle.ownerDocument;
     ve = null;
   }
 
   /* =========================================================
-     10. 독서량 통계
+     9. 독서량 통계
      ========================================================= */
   var RANGES = ['day', 'week', 'month', 'year'];
   var statRange = 'day';
@@ -1617,7 +1538,7 @@
   }
 
   /* =========================================================
-     11. 화면 전환
+     10. 화면 전환
      ========================================================= */
   function showView(name) {
     view = name;
@@ -1653,7 +1574,7 @@
   }
 
   /* =========================================================
-     12. 체크 / 해제 · 권수
+     11. 체크 / 해제 · 권수
      ========================================================= */
   function afterDataChange(popItemBtn) {
     saveStore();
@@ -1729,7 +1650,7 @@
   }
 
   /* =========================================================
-     13. 축하 연출
+     12. 축하 연출
      ========================================================= */
   function burstConfetti() {
     for (var i = 0; i < 90; i++) {
@@ -1778,7 +1699,7 @@
   }
 
   /* =========================================================
-     14. 이벤트 연결
+     13. 이벤트 연결
      ========================================================= */
   elTabCalendar.addEventListener('click', function () { showView('calendar'); });
   elTabCheck.addEventListener('click', function () {
@@ -1882,7 +1803,7 @@
   }, 60000);
 
   /* =========================================================
-     15. 시작
+     14. 시작
      ========================================================= */
   loadStore();
   measureBaseLen();

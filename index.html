@@ -824,7 +824,7 @@
   }
 
   function makeRing(spec, strokeColor, isProgress) {
-    var len = measureBaseLen() * spec.scale;
+    var len = measureBaseLen();
     var path = document.createElementNS(NS, 'path');
     path.setAttribute('d', HEART_D);
     path.setAttribute('fill', 'none');

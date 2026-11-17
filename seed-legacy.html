@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><title>legacy seed</title></head>
+<body>
+<script>
+/* 임시 검증용: 예전 버전 앱이 남긴(타임스탬프 없는) localStorage 기록을 흉내냅니다. */
+try {
+  window.localStorage.setItem('toto-daily-heart:v1', JSON.stringify({
+    "2026-11-16": { "enBooks": 3, "note": true, "koBooks": 1, "diary": true }
+  }));
+  document.body.textContent = 'seeded';
+} catch (e) {
+  document.body.textContent = 'seed failed: ' + e;
+}
+window.setTimeout(function () { window.location.replace('./index.html'); }, 400);
+</script>
+</body>
+</html>

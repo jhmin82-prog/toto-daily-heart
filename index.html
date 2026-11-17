@@ -70,6 +70,17 @@
   @supports not ((-webkit-background-clip:text) or (background-clip:text)){
     .brand-title{color:#3A3350;background:none;}
   }
+  .sync-state{
+    display:inline-flex;align-items:center;gap:4px;
+    font-size:clamp(11px,1.1vw,13px);font-weight:800;line-height:1;
+    color:var(--ink-soft);background:#F4F2FC;border-radius:999px;
+    padding:7px 11px;white-space:nowrap;flex:0 0 auto;
+    transition:color .2s ease,background .2s ease;
+  }
+  .sync-state.is-ok{color:#0E9F6E;background:#E9FBF3;}
+  .sync-state.is-busy{color:#7A5CD6;background:#F2EDFF;}
+  .sync-state.is-offline{color:#B26A00;background:#FFF4E0;}
+
   .tabs{display:flex;gap:6px;background:#fff;padding:6px;border-radius:999px;box-shadow:var(--shadow);}
   .tab{
     border:0;background:transparent;color:var(--ink-soft);
@@ -487,6 +498,7 @@
       <h1 class="brand-title">토토의 매일하트</h1>
       <span class="brand-emoji">🌈</span>
     </div>
+    <div class="sync-state" id="syncState" role="status" aria-live="polite">☁️ 연결 준비 중</div>
     <nav class="tabs" aria-label="화면 전환">
       <button class="tab is-active" type="button" id="tabCalendar" data-tab="calendar" role="tab" aria-selected="true">📅 달력</button>
       <button class="tab" type="button" id="tabCheck" data-tab="check" role="tab" aria-selected="false">🚂 오늘 체크</button>
@@ -720,6 +732,231 @@
       storageBroken = true;
       showBanner('⚠️', '기록을 저장할 수 없어요', '브라우저 저장 공간을 확인해 주세요.');
     }
+  }
+
+  /* =========================================================
+     3-1. 클라우드 동기화 (Firebase Realtime Database · 무료)
+     - localStorage는 이 기기의 캐시/오프라인 백업으로 그대로 유지
+     - 날짜별·항목별 타임스탬프(_ts)로 병합: 기존 기록이 지워지지 않음
+     ========================================================= */
+  var SYNC_URL = 'https://toto-daily-heart-default-rtdb.asia-southeast1.firebasedatabase.app/toto-xqdmhahkraxf.json';
+  var PRE_SYNC_BACKUP_KEY = 'toto-daily-heart:v1:pre-sync-backup';
+  var REMOTE_BACKUP_KEY = 'toto-daily-heart:v1:remote-backup';
+  var SYNC_PULL_MS = 20000;
+  var SYNC_PUSH_DELAY = 600;
+
+  var elSyncState = document.getElementById('syncState');
+  var pushing = false;
+  var pushQueued = false;
+  var pushTimer = null;
+  var syncLabelCache = '';
+
+  function setSyncState(kind, label, title) {
+    if (!elSyncState) { return; }
+    var sig = kind + '|' + label;
+    if (syncLabelCache === sig) { return; }
+    syncLabelCache = sig;
+    elSyncState.className = 'sync-state' + (kind ? ' is-' + kind : '');
+    elSyncState.textContent = label;
+    elSyncState.title = title || label;
+  }
+
+  function isDateKey(k) { return /^\d{4}-\d{2}-\d{2}$/.test(k); }
+  function isNum(v) { return typeof v === 'number' && isFinite(v); }
+  function truthyVal(v) { return isNum(v) ? v > 0 : !!v; }
+  function has(obj, k) { return Object.prototype.hasOwnProperty.call(obj, k); }
+
+  function tsOf(rec, k) {
+    if (!rec || !rec._ts || !has(rec._ts, k)) { return 0; }
+    var v = rec._ts[k];
+    return (isNum(v) && v > 0) ? v : 0;
+  }
+
+  function markItem(rec, itemKey) {
+    if (!rec) { return; }
+    if (!rec._ts || typeof rec._ts !== 'object') { rec._ts = {}; }
+    rec._ts[itemKey] = Date.now();
+  }
+
+  /* 타임스탬프가 양쪽 모두 없을 때: 체크는 살리고 권수는 큰 값 */
+  function pickUnion(a, b) {
+    if (isNum(a) && isNum(b)) { return Math.max(a, b); }
+    var at = truthyVal(a), bt = truthyVal(b);
+    if (at && !bt) { return a; }
+    if (!at && bt) { return b; }
+    if (a === undefined || a === null) { return b; }
+    return a;
+  }
+
+  function cloneRec(rec) {
+    if (!rec || typeof rec !== 'object') { return null; }
+    var out = {}, ts = {}, k;
+    for (k in rec) {
+      if (!has(rec, k) || k === '_ts') { continue; }
+      out[k] = rec[k];
+    }
+    if (rec._ts && typeof rec._ts === 'object') {
+      for (k in rec._ts) {
+        if (has(rec._ts, k) && isNum(rec._ts[k])) { ts[k] = rec._ts[k]; }
+      }
+      if (Object.keys(ts).length) { out._ts = ts; }
+    }
+    return out;
+  }
+
+  function mergeRecord(l, r) {
+    if (!l) { return cloneRec(r); }
+    if (!r) { return cloneRec(l); }
+    var out = {}, ts = {}, keys = {}, k;
+    for (k in l) { if (has(l, k) && k !== '_ts') { keys[k] = 1; } }
+    for (k in r) { if (has(r, k) && k !== '_ts') { keys[k] = 1; } }
+    for (k in keys) {
+      var lt = tsOf(l, k), rt = tsOf(r, k);
+      var lv = l[k], rv = r[k];
+      if (lt > 0 && rt > 0) {
+        if (rt > lt) { out[k] = rv; ts[k] = rt; }
+        else { out[k] = lv; ts[k] = lt; }
+      } else if (lt > 0) {
+        out[k] = lv; ts[k] = lt;
+      } else if (rt > 0) {
+        out[k] = rv; ts[k] = rt;
+      } else {
+        out[k] = pickUnion(lv, rv);
+      }
+    }
+    var srcs = [l._ts, r._ts], i, kk, v;
+    for (i = 0; i < srcs.length; i++) {
+      if (!srcs[i] || typeof srcs[i] !== 'object') { continue; }
+      for (kk in srcs[i]) {
+        if (!has(srcs[i], kk) || !isNum(srcs[i][kk])) { continue; }
+        v = srcs[i][kk];
+        if (v > (ts[kk] || 0)) { ts[kk] = v; }
+      }
+    }
+    if (Object.keys(ts).length) { out._ts = ts; }
+    return out;
+  }
+
+  /* 양쪽 저장소를 날짜별로 안전하게 병합 (원격에 없는 로컬 날짜는 그대로 유지) */
+  function mergeDays(localDays, remoteDays) {
+    var out = {}, k, ld = localDays || {}, rd = remoteDays || {};
+    for (k in ld) {
+      if (!has(ld, k) || !isDateKey(k)) { continue; }
+      out[k] = rd[k] ? mergeRecord(ld[k], rd[k]) : cloneRec(ld[k]);
+    }
+    for (k in rd) {
+      if (!has(rd, k) || !isDateKey(k)) { continue; }
+      if (!out[k]) { out[k] = cloneRec(rd[k]); }
+    }
+    return out;
+  }
+
+  function canon(v) {
+    if (v === null || typeof v !== 'object') { return JSON.stringify(v); }
+    var ks = Object.keys(v).sort(), parts = [], i;
+    for (i = 0; i < ks.length; i++) { parts.push(JSON.stringify(ks[i]) + ':' + canon(v[ks[i]])); }
+    return '{' + parts.join(',') + '}';
+  }
+  function sameStore(a, b) { return canon(a || {}) === canon(b || {}); }
+  function onlyDates(days) {
+    var out = {}, k;
+    for (k in (days || {})) { if (has(days, k) && isDateKey(k)) { out[k] = days[k]; } }
+    return out;
+  }
+  function timeNowLabel() {
+    try {
+      var d = new Date();
+      return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+    } catch (err) { return ''; }
+  }
+
+  function fetchRemoteDays() {
+    return window.fetch(SYNC_URL, { cache: 'no-store' }).then(function (res) {
+      if (!res.ok) { throw new Error('HTTP ' + res.status); }
+      return res.json();
+    }).then(function (data) {
+      if (!data || typeof data !== 'object' || !data.days) { return {}; }
+      return onlyDates(data.days);
+    });
+  }
+
+  function putRemoteDays(days) {
+    var body = JSON.stringify({ v: 1, updatedAt: Date.now(), days: days });
+    return window.fetch(SYNC_URL, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: body
+    }).then(function (res) {
+      if (!res.ok) { throw new Error('HTTP ' + res.status); }
+      return true;
+    });
+  }
+
+  function stashJson(key, value, onlyIfEmpty) {
+    try {
+      if (onlyIfEmpty && window.localStorage.getItem(key)) { return; }
+      window.localStorage.setItem(key, value);
+    } catch (err) { /* 저장 공간이 없으면 백업만 건너뜀 */ }
+  }
+
+  function softRefresh() {
+    calDirty = true;
+    statsDirty = true;
+    if (view === 'calendar') { renderCalendar(); }
+    else if (view === 'check') { renderCheck(false); }
+    else { renderStats(); }
+  }
+
+  function scheduleSync(delay) {
+    if (pushTimer) { window.clearTimeout(pushTimer); }
+    pushTimer = window.setTimeout(function () {
+      pushTimer = null;
+      syncNow();
+    }, typeof delay === 'number' ? delay : SYNC_PUSH_DELAY);
+  }
+
+  function syncNow() {
+    if (!window.fetch) {
+      setSyncState('offline', '⚠️ 오프라인', '이 브라우저에서는 클라우드 동기화를 쓸 수 없어 이 기기에만 저장해요.');
+      return;
+    }
+    if (pushing) { pushQueued = true; return; }
+    if (navigator.onLine === false) {
+      setSyncState('offline', '⚠️ 오프라인', '인터넷이 끊겨 이 기기에 저장 중이에요. 연결되면 자동으로 맞춰요.');
+      return;
+    }
+    pushing = true;
+    setSyncState('busy', '☁️ 동기화 중...', '클라우드와 맞추는 중이에요.');
+    var localBefore = store;
+
+    fetchRemoteDays().then(function (remoteDays) {
+      var merged = mergeDays(store, remoteDays);
+      var localChanged = !sameStore(merged, store);
+      var remoteChanged = !sameStore(merged, remoteDays);
+
+      if (localChanged) {
+        stashJson(PRE_SYNC_BACKUP_KEY, JSON.stringify(localBefore), true);
+        store = merged;
+        saveStore();
+      }
+      if (remoteChanged) {
+        stashJson(REMOTE_BACKUP_KEY, JSON.stringify({ at: Date.now(), days: remoteDays }), false);
+        return putRemoteDays(merged).then(function () {
+          setSyncState('ok', '☁️ 동기화됨', '마지막 동기화 ' + timeNowLabel());
+          if (localChanged) { softRefresh(); }
+        });
+      }
+      setSyncState('ok', '☁️ 동기화됨', '마지막 동기화 ' + timeNowLabel());
+      if (localChanged) { softRefresh(); }
+    }).catch(function () {
+      setSyncState('offline', '⚠️ 오프라인', '클라우드에 연결하지 못했어요. 이 기기에 저장해 두고 다시 시도할게요.');
+    }).then(function () {
+      pushing = false;
+      if (pushQueued) {
+        pushQueued = false;
+        scheduleSync(300);
+      }
+    });
   }
 
   /* =========================================================
@@ -1420,6 +1657,7 @@
      ========================================================= */
   function afterDataChange(popItemBtn) {
     saveStore();
+    scheduleSync();
     renderCheck(true);
     calDirty = true;
     statsDirty = true;
@@ -1440,11 +1678,11 @@
 
     if (item && item.book) {
       var cur = bookCount(rec, item.bookKey);
-      if (cur > 0) { rec[item.bookKey] = 0; }
-      else { rec[item.bookKey] = 1; }
+      rec[item.bookKey] = cur > 0 ? 0 : 1;
+      markItem(rec, item.bookKey);
     } else {
-      if (rec[itemId]) { delete rec[itemId]; }
-      else { rec[itemId] = true; }
+      rec[itemId] = !truthyVal(rec[itemId]);
+      markItem(rec, itemId);
     }
 
     var len = 0;
@@ -1474,6 +1712,7 @@
     if (next < 0) { next = 0; }
 
     rec[item.bookKey] = next;
+    markItem(rec, item.bookKey);
 
     var len = 0;
     for (var k in rec) { if (Object.prototype.hasOwnProperty.call(rec, k)) { len++; } }
@@ -1617,7 +1856,19 @@
     if (view === 'calendar') { renderCalendar(); }
     else if (view === 'check') { renderCheck(false); }
     else { renderStats(); }
+    syncNow();
   });
+
+  window.addEventListener('focus', function () { syncNow(); });
+  window.addEventListener('online', function () { syncNow(); });
+  window.addEventListener('offline', function () {
+    setSyncState('offline', '⚠️ 오프라인', '인터넷이 끊겨 이 기기에 저장 중이에요. 연결되면 자동으로 맞춰요.');
+  });
+  window.setInterval(function () {
+    if (document.hidden) { return; }
+    if (pushTimer) { return; }
+    syncNow();
+  }, SYNC_PULL_MS);
 
   var lastTodayKey = keyOf(todayDate());
   window.setInterval(function () {
@@ -1645,6 +1896,8 @@
   goToDate(todayDate());
   renderCheck(false);
   showView('calendar');
+  setSyncState('', '☁️ 연결 중...', '클라우드와 맞추는 중이에요.');
+  syncNow();
 })();
 </script>
 </body>
